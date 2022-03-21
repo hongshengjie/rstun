@@ -194,7 +194,10 @@ fn runmm(r: String) -> std::io::Result<()> {
                 cmsg_buffer: None,
             })
         }
-        let resdata = socket::recvmmsg(skt, &mut msgs, MsgFlags::empty(), None);
+        
+        let flag_recv = unsafe{MsgFlags::from_bits_unchecked(0b10000000000000000)};
+      
+        let resdata = socket::recvmmsg(skt, &mut msgs,flag_recv, None);
         match resdata {
             Err(_) => continue,
             Ok(res) => {
