@@ -1,5 +1,7 @@
+use std::time::Duration;
 use clap::{App, Arg};
 use nix::sys::socket;
+use nix::sys::time::TimeSpec;
 use nix::sys::uio::IoVec;
 use std::iter::zip;
 use std::net::SocketAddr;
@@ -183,7 +185,7 @@ fn runmm(r: String) -> std::io::Result<()> {
     //let mut buf = [0u8; 1024];
     loop {
         let mut msgs = std::collections::LinkedList::new();
-        let mut receive_buffers = [[0u8; 32]; 100];
+        let mut receive_buffers = [[0u8; 32]; 1000];
         let iovs: Vec<_> = receive_buffers
             .iter_mut()
             .map(|buf| [IoVec::from_mut_slice(&mut buf[..])])
@@ -195,9 +197,11 @@ fn runmm(r: String) -> std::io::Result<()> {
             })
         }
         
-        let flag_recv = unsafe{MsgFlags::from_bits_unchecked(0b10000000000000000)};
-      
-        let resdata = socket::recvmmsg(skt, &mut msgs,flag_recv, None);
+        //let flag_recv = unsafe{MsgFlags::from_bits_unchecked(0b10000000000000000)};
+        //let flag_recv = MsgFlags::MSG_DONTWAIT;
+        let flag_recv = MsgFlags::empty();
+        let t_spec = TimeSpec::from_duration(Duration::from_micros(10));
+        let resdata = socket::recvmmsg(skt, &mut msgs,flag_recv, Some(t_spec));
         match resdata {
             Err(_) => continue,
             Ok(res) => {
