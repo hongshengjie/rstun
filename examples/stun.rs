@@ -1,22 +1,30 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr};
+use stun::agent::TransactionId;
 use stun::message::*;
 use stun::xoraddr::*;
 fn main() {
-    let src_addr = "127.0.0.1:2211";
+    let msg = create_stun();
+    parse_stun(msg.raw)
+}
+fn create_stun() -> Message {
     let mut msg = Message::new();
-    if let Ok(src_skt_addr) = src_addr.parse::<SocketAddr>() {
+    _ = msg.build(&[
+        Box::new(TransactionId::default()),
+        Box::new(BINDING_REQUEST),
+    ]);
+    println!("{}", msg);
+    msg
+}
+fn parse_stun(raw: Vec<u8>) {
+    let mut resp = Message::new();
+    resp.raw = raw;
+    if resp.decode().is_ok() {
+        resp.typ = BINDING_SUCCESS;
         let xoraddr = XorMappedAddress {
-            ip: src_skt_addr.ip(),
-            port: src_skt_addr.port(),
+            ip: IpAddr::V4(Ipv4Addr::new(123, 111, 11, 23)),
+            port: 2232,
         };
-        msg.typ = BINDING_SUCCESS;
-        msg.write_header();
-        _ = xoraddr.add_to(&mut msg);
-        
-        let mut msg2 = Message::new();
-        msg2.raw = msg.raw;
-        if msg2.decode().is_ok(){
-            print!("{}",msg2)
-        }
+        _ = xoraddr.add_to(&mut resp);
+        println!("{}", resp)
     }
 }

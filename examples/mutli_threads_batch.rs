@@ -1,35 +1,29 @@
-use nix::sys::socket;
+use nix::sys::socket::{
+    self, sockopt, AddressFamily, InetAddr, IpAddr, MsgFlags, RecvMmsgData, SendMmsgData, SockAddr,
+    SockFlag, SockType,
+};
 use nix::sys::time::TimeSpec;
 use nix::sys::uio::IoVec;
 use std::iter::zip;
 use std::net::SocketAddr;
-use std::string::String;
 use std::thread;
 use std::time::Duration;
-use stun::message::Message;
 use stun::message::*;
 use stun::xoraddr::*;
 
-use nix::sys::socket::{
-    sockopt, AddressFamily, InetAddr, MsgFlags, RecvMmsgData, SendMmsgData, SockAddr, SockFlag,
-    SockType,
-};
-
 fn main() {
-    let addr_str = format!("0.0.0.0:{}", 3478);
-    let cpus = num_cpus::get();
+    let inet_addr = InetAddr::new(IpAddr::new_v4(0, 0, 0, 0), 3478);
+    let cpu_num = num_cpus::get();
     let mut i = 1;
-    while i <= cpus {
+    while i <= cpu_num {
+        let inet_addr_n = inet_addr.clone();
+        thread::spawn(move || run(inet_addr_n));
         i += 1;
-        let addr_str2 = String::from(&addr_str);
-        thread::spawn(move || run(addr_str2));
     }
-    run(addr_str)
+    run(inet_addr)
 }
 
-fn run(addr_str: String) {
-    let socket_addr: SocketAddr = addr_str.parse().unwrap();
-    let inet_addr = InetAddr::from_std(&socket_addr);
+fn run(inet_addr: InetAddr) {
     let skt_addr = SockAddr::new_inet(inet_addr);
     let skt = socket::socket(
         AddressFamily::Inet,
@@ -42,7 +36,7 @@ fn run(addr_str: String) {
     socket::bind(skt, &skt_addr).unwrap();
     loop {
         let mut recv_msg_list = std::collections::LinkedList::new();
-        let mut receive_buffers = [[0u8; 32]; 1000];
+        let mut receive_buffers = [[0u8; 50]; 1000];
         let iovs: Vec<_> = receive_buffers
             .iter_mut()
             .map(|buf| [IoVec::from_mut_slice(&mut buf[..])])
@@ -58,56 +52,79 @@ fn run(addr_str: String) {
         let resp_result =
             socket::recvmmsg(skt, &mut recv_msg_list, MsgFlags::empty(), Some(time_spec));
 
-        if let Ok(resp) = resp_result {
-            let mut msgs = Vec::new();
-            let mut src_addr_vec = Vec::new();
+        match resp_result {
+            Err(_) => {}
+            Ok(resp) => {
+                let mut msgs = Vec::new();
+                let mut src_addr_vec = Vec::new();
 
-            for recv_msg in resp {
-                src_addr_vec.push(recv_msg.address)
-            }
-            for (buf, src_addr_opt) in zip(receive_buffers, src_addr_vec) {
-                if let Some(addr) = src_addr_opt {
-                    let mut msg = Message::new();
-                    msg.raw = buf[..].to_vec();
-                    if msg.decode().is_ok() {
-                        if msg.typ == BINDING_REQUEST {
-                            if let Ok(ad) = addr.to_string().parse::<SocketAddr>() {
-                                let xoraddr = XorMappedAddress {
-                                    ip: ad.ip(),
-                                    port: ad.port(),
-                                };
-                                msg.typ = BINDING_SUCCESS;
-                                msg.write_header();
-                                if let Ok(_) = xoraddr.add_to(&mut msg) {
-                                    msgs.push((msg.raw, src_addr_opt));
-                                }
+                for recv_msg in resp {
+                    src_addr_vec.push(recv_msg.address)
+                }
+                for (buf, src_addr_opt) in zip(receive_buffers, src_addr_vec) {
+                    match src_addr_opt {
+                        None => {}
+                        Some(src_addr) => {
+                            if let Some(msg) = process_stun_request(src_addr, buf.to_vec()) {
+                                _ = socket::sendto(
+                                    skt,
+                                    &msg.raw,
+                                    &src_addr,
+                                    MsgFlags::MSG_DONTWAIT,
+                                );
                             }
                         }
                     }
                 }
+
+                let mut send_msg_list = std::collections::LinkedList::new();
+                let send_data: Vec<_> = msgs
+                    .iter()
+                    .map(|(buf, src_addr)| {
+                        let iov = [IoVec::from_slice(&buf[..])];
+                        let addr = *src_addr;
+                        (iov, addr)
+                    })
+                    .collect();
+
+                for (iov, addrx) in send_data {
+                    let send_msg = SendMmsgData {
+                        iov,
+                        cmsgs: &[],
+                        addr: addrx,
+                        _lt: Default::default(),
+                    };
+                    send_msg_list.push_back(send_msg);
+                }
+
+                _ = socket::sendmmsg(skt, send_msg_list.iter(), MsgFlags::MSG_DONTWAIT);
             }
+        }
+    }
+}
 
-            let mut send_msg_list = std::collections::LinkedList::new();
-            let send_data: Vec<_> = msgs
-                .iter()
-                .map(|(buf, src_addr)| {
-                    let iov = [IoVec::from_slice(&buf[..])];
-                    let addr = *src_addr;
-                    (iov, addr)
-                })
-                .collect();
-
-            for (iov, addrx) in send_data {
-                let send_msg = SendMmsgData {
-                    iov: iov,
-                    cmsgs: &[],
-                    addr: addrx,
-                    _lt: Default::default(),
-                };
-                send_msg_list.push_back(send_msg);
+fn process_stun_request(src_addr: SockAddr, buf: Vec<u8>) -> Option<Message> {
+    let mut msg = Message::new();
+    msg.raw = buf;
+    if msg.decode().is_err() {
+        return None;
+    }
+    if msg.typ != BINDING_REQUEST {
+        return None;
+    }
+    match src_addr.to_string().parse::<SocketAddr>() {
+        Err(_) => return None,
+        Ok(src_skt_addr) => {
+            let xoraddr = XorMappedAddress {
+                ip: src_skt_addr.ip(),
+                port: src_skt_addr.port(),
+            };
+            msg.typ = BINDING_SUCCESS;
+            msg.write_header();
+            match xoraddr.add_to(&mut msg) {
+                Err(_) => None,
+                Ok(_) => Some(msg),
             }
-
-            _ = socket::sendmmsg(skt, send_msg_list.iter(), MsgFlags::MSG_DONTWAIT);
         }
     }
 }
