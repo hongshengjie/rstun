@@ -1,9 +1,9 @@
 use std::net::SocketAddr;
 use stun::message::*;
 use stun::xoraddr::*;
-
+use nix::sys::socket::SockAddr;
 use nix::sys::socket::{
-    self, sockopt, AddressFamily, InetAddr, MsgFlags, SockAddr, SockFlag, SockType,
+    self, sockopt, AddressFamily, InetAddr, MsgFlags, SockFlag, SockType,
 };
 
 #[cfg(any(target_os = "linux"))]

@@ -1,7 +1,5 @@
 use std::thread;
-
 use nix::sys::socket::{InetAddr, IpAddr};
-
 #[cfg(any(target_os = "linux"))]
 use rstun::run_reuse_port_recv_send_mmsg;
 
