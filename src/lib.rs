@@ -116,16 +116,16 @@ pub fn run_reuse_port_recv_send_mmsg(inet_addr: InetAddr) {
         }
 
         let time_spec = TimeSpec::from_duration(Duration::from_micros(10));
-        let resp_result =
+        let requests_result =
             socket::recvmmsg(skt, &mut recv_msg_list, MsgFlags::empty(), Some(time_spec));
 
-        match resp_result {
+        match requests_result {
             Err(_) => {}
-            Ok(resp) => {
+            Ok(requests) => {
                 let mut msgs = Vec::new();
                 let mut src_addr_vec = Vec::new();
 
-                for recv_msg in resp {
+                for recv_msg in requests {
                     src_addr_vec.push(recv_msg.address)
                 }
                 for (buf, src_addr_opt) in zip(receive_buffers, src_addr_vec) {
