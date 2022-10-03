@@ -1,13 +1,15 @@
+use nix::sys::socket::SockAddr;
+use nix::sys::socket::{self, sockopt, AddressFamily, InetAddr, MsgFlags, SockFlag, SockType};
 use std::net::SocketAddr;
 use stun::message::*;
 use stun::xoraddr::*;
-use nix::sys::socket::SockAddr;
-use nix::sys::socket::{
-    self, sockopt, AddressFamily, InetAddr, MsgFlags, SockFlag, SockType,
-};
 
 #[cfg(any(target_os = "linux"))]
-use nix::sys::socket::{ RecvMmsgData, SendMmsgData};
+use nix::sys::socket::{RecvMmsgData, SendMmsgData};
+use nix::sys::time::TimeSpec;
+use nix::sys::uio::IoVec;
+use std::iter::zip;
+use std::time::Duration;
 
 pub fn process_stun_request(src_addr: SockAddr, buf: Vec<u8>) -> Option<Message> {
     let mut msg = Message::new();
@@ -53,7 +55,7 @@ pub fn run_single_thread(inet_addr: InetAddr) {
                 None => {}
                 Some(src_addr) => {
                     if let Some(msg) = process_stun_request(src_addr, buf[..len].to_vec()) {
-                        _ = socket::sendto(skt, &msg.raw, &src_addr, MsgFlags::MSG_DONTWAIT);
+                        _ = socket::sendto(skt, &msg.raw, &src_addr, MsgFlags::empty());
                     }
                 }
             },
@@ -80,14 +82,13 @@ pub fn run_reuse_port(inet_addr: InetAddr) {
                 None => {}
                 Some(src_addr) => {
                     if let Some(msg) = process_stun_request(src_addr, buf[..len].to_vec()) {
-                        _ = socket::sendto(skt, &msg.raw, &src_addr, MsgFlags::MSG_DONTWAIT);
+                        _ = socket::sendto(skt, &msg.raw, &src_addr, MsgFlags::empty());
                     }
                 }
             },
         }
     }
 }
-
 
 #[cfg(any(target_os = "linux"))]
 pub fn run_reuse_port_recv_send_mmsg(inet_addr: InetAddr) {
@@ -115,7 +116,7 @@ pub fn run_reuse_port_recv_send_mmsg(inet_addr: InetAddr) {
             })
         }
 
-        let time_spec = TimeSpec::from_duration(Duration::from_micros(10));
+        let time_spec = TimeSpec::from_duration(Duration::from_millis(100));
         let requests_result =
             socket::recvmmsg(skt, &mut recv_msg_list, MsgFlags::empty(), Some(time_spec));
 
@@ -133,12 +134,7 @@ pub fn run_reuse_port_recv_send_mmsg(inet_addr: InetAddr) {
                         None => {}
                         Some(src_addr) => {
                             if let Some(msg) = process_stun_request(src_addr, buf.to_vec()) {
-                                _ = socket::sendto(
-                                    skt,
-                                    &msg.raw,
-                                    &src_addr,
-                                    MsgFlags::MSG_DONTWAIT,
-                                );
+                                msgs.push((msg.raw, src_addr_opt));
                             }
                         }
                     }
@@ -164,7 +160,7 @@ pub fn run_reuse_port_recv_send_mmsg(inet_addr: InetAddr) {
                     send_msg_list.push_back(send_msg);
                 }
 
-                _ = socket::sendmmsg(skt, send_msg_list.iter(), MsgFlags::MSG_DONTWAIT);
+                _ = socket::sendmmsg(skt, send_msg_list.iter(), MsgFlags::empty());
             }
         }
     }
